@@ -1,0 +1,9 @@
+# Virtual Environment
+/venv
+
+# PyCharm IDE
+.idea
+
+# Dataset and Results
+/data
+/results

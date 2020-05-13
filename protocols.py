@@ -51,7 +51,4 @@ def intelligent_tsch(measurements, available):
                 row[-1] = True
     available = [np.resize(np.argwhere(li.numpy()).flatten().repeat(20), datapoints) for li in available]
     interferences = [measurements[np.arange(datapoints), i, available[i]] for i in range(sequences)]
-    channels_matrix = np.zeros(measurements.shape)
-    for i in range(sequences):
-        channels_matrix[np.arange(datapoints), i, available[i]] = 1
-    return torch.stack(interferences).permute(1, 0), channels_matrix
+    return torch.stack(interferences).permute(1, 0)

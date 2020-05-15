@@ -49,7 +49,7 @@ if __name__ == '__main__':
     criterion = nn.BCELoss()
     error_props = BitErrorProb(power, alpha, distance)
     reception_props = PacketReceptionProb(packet_length)
-    models = {'mean': (0.05, Network(layers, neurons)), 'max': (0.6, Network(layers, neurons))}
+    models = {'mean': (0.05, Network(layers, neurons)), 'max': (0.55, Network(layers, neurons))}
     # Training
     for reducing_method, (penalty_weight, network) in models.items():
         optimizer = optim.RMSprop(network.parameters(), lr=1e-4)

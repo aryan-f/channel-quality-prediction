@@ -97,6 +97,10 @@ if __name__ == '__main__':
         plt.tight_layout()
         plt.savefig(files_path + '-metrics.png')
         plt.show()
+    # Loading already-trained Models
+    for reducing_method, (penalty_weight, network) in models.items():
+        model_path = f'results/{dataset}-{reducing_method}.pt'
+        models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
     figure, axes = plt.subplots(6, 1, sharex=True, sharey=True, figsize=(10, 15))
     with torch.no_grad():
@@ -111,12 +115,13 @@ if __name__ == '__main__':
         enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
         describe(enhanced_tsch_receptions, 'Enhanced TSCH')
         for subplot in range(6):
-            axes[subplot].plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue')
-            axes[subplot].plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange')
+            axes[subplot].plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
+            axes[subplot].plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
         # Intelligent TSCH
         for reducing_method, (penalty_weight, network) in models.items():
             print(f'Reducing Method: "{reducing_method}"')
             plt_color = 'green' if reducing_method == 'mean' else 'purple'
+            plt_style = '--' if reducing_method == 'mean' else '-'
             network.eval()
             pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
             past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
@@ -124,16 +129,16 @@ if __name__ == '__main__':
             past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
             blacklist = network(past_windows_normalized)
             future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
-            subplot = 0
+            subplot = -1
             for threshold in (0.25, 0.50, 0.75):
                 available_channels = blacklist < threshold
                 interference_values = intelligent_tsch(future_windows, available_channels)
                 error_props_values = error_props(interference_values)
                 reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
                 describe(reception_props_values, 'Threshold: {:.2f}'.format(threshold))
-                axes[subplot].plot(reception_props_values, label=reducing_method, color=plt_color)
-                axes[subplot].set_title('Threshold: {:.2f}'.format(threshold))
                 subplot += 1
+                axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
+                axes[subplot].set_title('Threshold: {:.2f}'.format(threshold))
             for n in (3, 6, 9):
                 scores_sorted = np.sort(blacklist)
                 thresholds = scores_sorted[:, n]
@@ -142,8 +147,15 @@ if __name__ == '__main__':
                 error_props_values = error_props(interference_values)
                 reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
                 describe(reception_props_values, 'Top {}'.format(n))
-                axes[subplot].plot(reception_props_values, label=reducing_method, color=plt_color)
-                axes[subplot].set_title('Top {}'.format(n))
                 subplot += 1
+                axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
+                axes[subplot].set_title('Top {}'.format(n))
+            axes[subplot].set_xlim(0, datapoints)
+            axes[subplot].set_xlabel('Time (Sec)')
+            axes[subplot].set_ylabel('PRP')
+            axes[subplot].set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
+            axes[subplot].set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
+    handles, labels = axes[subplot].get_legend_handles_labels()
+    figure.legend(handles, labels, loc='center right')
     plt.savefig(f'results/{dataset}-performances.png')
     plt.show()

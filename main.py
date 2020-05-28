@@ -19,10 +19,10 @@ def reduce(values, method, matrix=None):
     return values
 
 
-def describe(receptions, title):
+def describe(receptions, title, ed_enabled=True):
     print(title)
     prr = torch.mean(receptions)
-    n_ed, n_rx, n_tx = 3, 7, 1
+    n_ed, n_rx, n_tx = 3 if ed_enabled else 0, 7, 1
     i_ed, i_rx, i_tx = 5e-3, 5e-3, 10e-3
     t_ed, t_tx = 128e-6,  3.2e-3
     v_cc = 3.3
@@ -37,8 +37,8 @@ if __name__ == '__main__':
     power, alpha, distance = -10., 3.5, 3.
     packet_length = 133  # Bytes
     past_window, future_window = 5, 5  # Seconds
-    layers, neurons = 2, 32
-    iterations, batch_size = 1000, 50
+    layers, neurons = 2, 50
+    iterations, batch_size = 1000, 32
     # Dataset Preparation
     data = torch.load(f'data/{dataset}.pt')
     datapoints, sequences, channels = data.shape
@@ -102,60 +102,99 @@ if __name__ == '__main__':
         model_path = f'results/{dataset}-{reducing_method}.pt'
         models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
-    figure, axes = plt.subplots(6, 1, sharex=True, sharey=True, figsize=(10, 15))
-    with torch.no_grad():
-        print(f'Dataset: "{dataset}.pt"')
-        # Standard TSCH & Enhanced TSCH
-        tsch_interference, tsch_channels_matrix = tsch(data)
-        tsch_errors = error_props(tsch_interference)
-        tsch_receptions = reception_props(tsch_errors)
-        describe(tsch_receptions, 'TSCH')
-        enhanced_tsch_interference = enhanced_tsch(data, device_sample_rate / sample_rate)
-        enhanced_tsch_errors = error_props(enhanced_tsch_interference)
-        enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
-        describe(enhanced_tsch_receptions, 'Enhanced TSCH')
-        for subplot in range(6):
-            axes[subplot].plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
-            axes[subplot].plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
-        # Intelligent TSCH
-        for reducing_method, (penalty_weight, network) in models.items():
-            print(f'Reducing Method: "{reducing_method}"')
-            plt_color = 'green' if reducing_method == 'mean' else 'purple'
-            plt_style = '--' if reducing_method == 'mean' else '-'
-            network.eval()
-            pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
-            past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
-            past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
-            past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
+    tsch_interference, tsch_channels_matrix = tsch(data)
+    tsch_errors = error_props(tsch_interference)
+    tsch_receptions = reception_props(tsch_errors)
+    describe(tsch_receptions, 'Standard TSCH', ed_enabled=False)
+    enhanced_tsch_interference = enhanced_tsch(data, device_sample_rate / sample_rate)
+    enhanced_tsch_errors = error_props(enhanced_tsch_interference)
+    enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
+    describe(enhanced_tsch_receptions, 'Enhanced TSCH')
+    for reducing_method, (penalty_weight, network) in models.items():
+        # noinspection PyTypeChecker
+        figure, axis = plt.subplots(sharex=True, sharey=True, figsize=(10, 3.5))
+        network.eval()
+        pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
+        past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
+        future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
+        past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
+        past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
+        with torch.no_grad():
             blacklist = network(past_windows_normalized)
-            future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
-            subplot = -1
-            for threshold in (0.25, 0.50, 0.75):
-                available_channels = blacklist < threshold
-                interference_values = intelligent_tsch(future_windows, available_channels)
-                error_props_values = error_props(interference_values)
-                reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-                describe(reception_props_values, 'Threshold: {:.2f}'.format(threshold))
-                subplot += 1
-                axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
-                axes[subplot].set_title('Threshold: {:.2f}'.format(threshold))
-            for n in (3, 6, 9):
-                scores_sorted = np.sort(blacklist)
-                thresholds = scores_sorted[:, n]
-                thresholds = np.expand_dims(thresholds, axis=1)
-                available_channels = blacklist < torch.from_numpy(thresholds)
-                error_props_values = error_props(interference_values)
-                reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-                describe(reception_props_values, 'Top {}'.format(n))
-                subplot += 1
-                axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
-                axes[subplot].set_title('Top {}'.format(n))
-            axes[subplot].set_xlim(0, datapoints)
-            axes[subplot].set_xlabel('Time (Sec)')
-            axes[subplot].set_ylabel('PRP')
-            axes[subplot].set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
-            axes[subplot].set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
-    handles, labels = axes[subplot].get_legend_handles_labels()
-    figure.legend(handles, labels, loc='center right')
-    plt.savefig(f'results/{dataset}-performances.png')
-    plt.show()
+            scores_sorted = np.sort(blacklist)
+            thresholds = scores_sorted[:, 8]
+            thresholds = np.expand_dims(thresholds, axis=1)
+            available_channels = blacklist < torch.from_numpy(thresholds)
+            interference_values = intelligent_tsch(future_windows, available_channels)
+            error_props_values = error_props(interference_values)
+            reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
+        describe(reception_props_values, 'Our Work ({})'.format(reducing_method))
+        axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
+        axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
+        axis.plot(reception_props_values, label='Our Work ({})'.format(reducing_method), color='green')
+        axis.set_xlim(0, datapoints)
+        axis.set_xlabel('Time (Sec)')
+        axis.set_ylabel('PRP')
+        axis.set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
+        axis.set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
+        axis.set_title(dataset.capitalize())
+        plt.legend()
+        plt.show()
+    # figure, axes = plt.subplots(6, 1, sharex=True, sharey=True, figsize=(10, 15))
+    # with torch.no_grad():
+    #     print(f'Dataset: "{dataset}.pt"')
+    #     # Standard TSCH & Enhanced TSCH
+    #     tsch_interference, tsch_channels_matrix = tsch(data)
+    #     tsch_errors = error_props(tsch_interference)
+    #     tsch_receptions = reception_props(tsch_errors)
+    #     describe(tsch_receptions, 'TSCH')
+    #     enhanced_tsch_interference = enhanced_tsch(data, device_sample_rate / sample_rate)
+    #     enhanced_tsch_errors = error_props(enhanced_tsch_interference)
+    #     enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
+    #     describe(enhanced_tsch_receptions, 'Enhanced TSCH')
+    #     for subplot in range(6):
+    #         axes[subplot].plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
+    #         axes[subplot].plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
+    #     # Intelligent TSCH
+    #     for reducing_method, (penalty_weight, network) in models.items():
+    #         print(f'Reducing Method: "{reducing_method}"')
+    #         plt_color = 'green' if reducing_method == 'mean' else 'purple'
+    #         plt_style = '--' if reducing_method == 'mean' else '-'
+    #         network.eval()
+    #         pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
+    #         past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
+    #         past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
+    #         past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
+    #         blacklist = network(past_windows_normalized)
+    #         future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
+    #         subplot = -1
+    #         for threshold in (0.25, 0.50, 0.75):
+    #             available_channels = blacklist < threshold
+    #             interference_values = intelligent_tsch(future_windows, available_channels)
+    #             error_props_values = error_props(interference_values)
+    #             reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
+    #             describe(reception_props_values, 'Threshold: {:.2f}'.format(threshold))
+    #             subplot += 1
+    #             axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
+    #             axes[subplot].set_title('Threshold: {:.2f}'.format(threshold))
+    #         for n in (3, 6, 9):
+    #             scores_sorted = np.sort(blacklist)
+    #             thresholds = scores_sorted[:, n]
+    #             thresholds = np.expand_dims(thresholds, axis=1)
+    #             available_channels = blacklist < torch.from_numpy(thresholds)
+    #             interference_values = intelligent_tsch(future_windows, available_channels)
+    #             error_props_values = error_props(interference_values)
+    #             reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
+    #             describe(reception_props_values, 'Top {}'.format(n))
+    #             subplot += 1
+    #             axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
+    #             axes[subplot].set_title('Top {}'.format(n))
+    #         axes[subplot].set_xlim(0, datapoints)
+    #         axes[subplot].set_xlabel('Time (Sec)')
+    #         axes[subplot].set_ylabel('PRP')
+    #         axes[subplot].set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
+    #         axes[subplot].set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
+    # handles, labels = axes[subplot].get_legend_handles_labels()
+    # figure.legend(handles, labels, loc='center right')
+    # plt.savefig(f'results/{dataset}-performances.png')
+    # plt.show()

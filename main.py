@@ -1,3 +1,4 @@
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -5,8 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as func
 import torch.optim as optim
 
-from protocols import tsch, enhanced_tsch, intelligent_tsch
 from model import Network
+from protocols import tsch, enhanced_tsch, intelligent_tsch
 from simulation import BitErrorProb, PacketReceptionProb
 
 
@@ -31,8 +32,10 @@ def describe(receptions, title, ed_enabled=True):
 
 
 if __name__ == '__main__':
+    # Adjusting the DPI of the figures.
+    mpl.rcParams['figure.dpi'] = 300
     # Configuration
-    dataset = 'suburb'
+    dataset = 'apartments'
     sample_rate, device_sample_rate = 2000, 10
     power, alpha, distance = -10., 3.5, 3.
     packet_length = 133  # Bytes

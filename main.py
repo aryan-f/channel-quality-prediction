@@ -21,7 +21,7 @@ def reduce(values, method, matrix=None):
 
 def describe(receptions, title, ed_enabled=True):
     print(title)
-    prr = torch.mean(receptions)
+    prr = torch.mean(receptions[240 * sample_rate: 300 * sample_rate])
     n_ed, n_rx, n_tx = 3 if ed_enabled else 0, 7, 1
     i_ed, i_rx, i_tx = 5e-3, 5e-3, 10e-3
     t_ed, t_tx = 128e-6,  3.2e-3
@@ -32,7 +32,7 @@ def describe(receptions, title, ed_enabled=True):
 
 if __name__ == '__main__':
     # Configuration
-    dataset = 'apartments'
+    dataset = 'suburb'
     sample_rate, device_sample_rate = 2000, 10
     power, alpha, distance = -10., 3.5, 3.
     packet_length = 133  # Bytes
@@ -42,8 +42,8 @@ if __name__ == '__main__':
     # Dataset Preparation
     data = torch.load(f'data/{dataset}.pt')
     datapoints, sequences, channels = data.shape
-    training_data = data[:int(0.80 * datapoints)]
-    validation_data = data[int(0.80 * datapoints):]
+    training_data = data[:240 * sample_rate]
+    validation_data = data[240 * sample_rate:]
     data_mean, data_std = torch.mean(training_data), torch.std(training_data)
     # Modules Setup
     criterion = nn.BCELoss()
@@ -107,6 +107,7 @@ if __name__ == '__main__':
             model_path = f'results/{dataset}-{reducing_method}.pt'
             models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
+    print(f'[{dataset.capitalize()}]')
     tsch_interference, tsch_channels_matrix = tsch(data)
     tsch_errors = error_props(tsch_interference)
     tsch_receptions = reception_props(tsch_errors)
@@ -115,9 +116,11 @@ if __name__ == '__main__':
     enhanced_tsch_errors = error_props(enhanced_tsch_interference)
     enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
     describe(enhanced_tsch_receptions, 'Enhanced TSCH')
+    # noinspection PyTypeChecker
+    figure, axis = plt.subplots(sharex=True, sharey=True, figsize=(4, 2.5))
+    axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='gray')
+    axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange')
     for reducing_method, (penalty_weight, network) in models.items():
-        # noinspection PyTypeChecker
-        figure, axis = plt.subplots(sharex=True, sharey=True, figsize=(10, 3.5))
         network.eval()
         pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
         past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
@@ -134,14 +137,12 @@ if __name__ == '__main__':
             error_props_values = error_props(interference_values)
             reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
         describe(reception_props_values, 'Our Work ({})'.format(reducing_method))
-        axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
-        axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
-        axis.plot(reception_props_values, label='Our Work ({})'.format(reducing_method), color='green')
-        axis.set_xlim(0, datapoints)
+        axis.plot(reception_props_values, label='Our Work ({})'.format(reducing_method), color='green' if reducing_method == 'mean' else 'blue')
         axis.set_xlabel('Time (Sec)')
         axis.set_ylabel('PRP')
         axis.set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
         axis.set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
+        axis.set_xlim(240 * sample_rate, min(len(reception_props_values), 300 * sample_rate))
+        axis.set_ylim(0.7, 1.02)
         axis.set_title(dataset.capitalize())
-        plt.legend()
-        plt.show()
+    plt.show()

@@ -50,57 +50,62 @@ if __name__ == '__main__':
     error_props = BitErrorProb(power, alpha, distance)
     reception_props = PacketReceptionProb(packet_length)
     models = {'mean': (0.05, Network(layers, neurons)), 'max': (0.55, Network(layers, neurons))}
-    # Training
-    for reducing_method, (penalty_weight, network) in models.items():
-        optimizer = optim.RMSprop(network.parameters(), lr=1e-4)
-        metrics = list()
-        network.train()
-        for iteration in range(iterations):
-            optimizer.zero_grad()
-            # Selecting a Random Batch
-            random_indices = np.random.randint(past_window * sample_rate, int(0.80 * datapoints) - future_window * sample_rate, batch_size)
-            past_windows = torch.cat([training_data[index - past_window * sample_rate: index] for index in random_indices], dim=1)
-            future_windows = torch.cat([training_data[index: index + future_window * sample_rate] for index in random_indices], dim=1)
-            # Forward Pass through the Network Module
-            past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
-            past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
-            blacklist = network(past_windows_normalized)
-            # Forward Pass through the Simulation Module
-            interference_power_levels, channels_matrix = tsch(future_windows)
-            error_prop_values = error_props(interference_power_levels)
-            error_props_per_channel = torch.mul(error_prop_values.unsqueeze(dim=2), channels_matrix)
-            errors_reduced = reduce(error_props_per_channel, reducing_method, channels_matrix)
-            # Loss Function
-            whitelist = torch.ones_like(blacklist) - blacklist
-            outputs = torch.mul(errors_reduced, whitelist)
-            desired_outputs = torch.zeros_like(outputs)
-            cross_entropy_loss = criterion(outputs, desired_outputs)
-            blacklisting_penalty = torch.mean(blacklist)
-            loss_func = cross_entropy_loss + blacklisting_penalty * penalty_weight
-            # Backward Pass
-            loss_func.backward()
-            # Optimization Step
-            optimizer.step()
-            # Logging
-            iteration_metrics = (cross_entropy_loss.item(), blacklisting_penalty.item(), loss_func.item())
-            metrics.append(iteration_metrics)
-            print('Iteration {}/{} Cross-Entropy Loss: {:.4f} Blacklisting Penalty: {:.4f} Total Loss: {:.4f}'.format(
-                iteration + 1, iterations, *iteration_metrics
-            ))
-        files_path = f'results/{dataset}-{reducing_method}'
-        torch.save(network, files_path + '.pt')
-        metrics = np.array(metrics)
-        figure, axes = plt.subplots(3, 1, figsize=(5, 9), sharex=True)
-        for dim, name in enumerate(('Cross-Entropy Loss', 'Penalty', 'Total Loss')):
-            axes[dim].set_title(name)
-            axes[dim].plot(metrics[:, dim])
-        plt.tight_layout()
-        plt.savefig(files_path + '-metrics.png')
-        plt.show()
-    # Loading already-trained Models
-    for reducing_method, (penalty_weight, network) in models.items():
-        model_path = f'results/{dataset}-{reducing_method}.pt'
-        models[reducing_method] = (penalty_weight, torch.load(model_path))
+    # Whether to train a new model or load pre-trained ones.
+    user_input = input('Train again? [Y/n]')
+    if user_input == 'Y':
+        # Training a New Model
+        for reducing_method, (penalty_weight, network) in models.items():
+            optimizer = optim.RMSprop(network.parameters(), lr=1e-4)
+            metrics = list()
+            network.train()
+            for iteration in range(iterations):
+                optimizer.zero_grad()
+                # Selecting a Random Batch
+                random_indices = np.random.randint(past_window * sample_rate, int(0.80 * datapoints) - future_window * sample_rate, batch_size)
+                past_windows = torch.cat([training_data[index - past_window * sample_rate: index] for index in random_indices], dim=1)
+                future_windows = torch.cat([training_data[index: index + future_window * sample_rate] for index in random_indices], dim=1)
+                # Forward Pass through the Network Module
+                past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
+                past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
+                blacklist = network(past_windows_normalized)
+                # Forward Pass through the Simulation Module
+                interference_power_levels, channels_matrix = tsch(future_windows)
+                error_prop_values = error_props(interference_power_levels)
+                error_props_per_channel = torch.mul(error_prop_values.unsqueeze(dim=2), channels_matrix)
+                errors_reduced = reduce(error_props_per_channel, reducing_method, channels_matrix)
+                # Loss Function
+                whitelist = torch.ones_like(blacklist) - blacklist
+                outputs = torch.mul(errors_reduced, whitelist)
+                desired_outputs = torch.zeros_like(outputs)
+                cross_entropy_loss = criterion(outputs, desired_outputs)
+                blacklisting_penalty = torch.mean(blacklist)
+                loss_func = cross_entropy_loss + blacklisting_penalty * penalty_weight
+                # Backward Pass
+                loss_func.backward()
+                # Optimization Step
+                optimizer.step()
+                # Logging
+                iteration_metrics = (cross_entropy_loss.item(), blacklisting_penalty.item(), loss_func.item())
+                metrics.append(iteration_metrics)
+                print('Iteration {}/{} Cross-Entropy Loss: {:.4f} Blacklisting Penalty: {:.4f} Total Loss: {:.4f}'.format(
+                    iteration + 1, iterations, *iteration_metrics
+                ))
+            files_path = f'results/{dataset}-{reducing_method}'
+            torch.save(network, files_path + '.pt')
+            metrics = np.array(metrics)
+            # noinspection PyTypeChecker
+            figure, axes = plt.subplots(3, 1, figsize=(5, 9), sharex=True)
+            for dim, name in enumerate(('Cross-Entropy Loss', 'Penalty', 'Total Loss')):
+                axes[dim].set_title(name)
+                axes[dim].plot(metrics[:, dim])
+            plt.tight_layout()
+            plt.savefig(files_path + '-metrics.png')
+            plt.show()
+    else:
+        # Loading already-trained Models
+        for reducing_method, (penalty_weight, network) in models.items():
+            model_path = f'results/{dataset}-{reducing_method}.pt'
+            models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
     tsch_interference, tsch_channels_matrix = tsch(data)
     tsch_errors = error_props(tsch_interference)
@@ -140,61 +145,3 @@ if __name__ == '__main__':
         axis.set_title(dataset.capitalize())
         plt.legend()
         plt.show()
-    # figure, axes = plt.subplots(6, 1, sharex=True, sharey=True, figsize=(10, 15))
-    # with torch.no_grad():
-    #     print(f'Dataset: "{dataset}.pt"')
-    #     # Standard TSCH & Enhanced TSCH
-    #     tsch_interference, tsch_channels_matrix = tsch(data)
-    #     tsch_errors = error_props(tsch_interference)
-    #     tsch_receptions = reception_props(tsch_errors)
-    #     describe(tsch_receptions, 'TSCH')
-    #     enhanced_tsch_interference = enhanced_tsch(data, device_sample_rate / sample_rate)
-    #     enhanced_tsch_errors = error_props(enhanced_tsch_interference)
-    #     enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
-    #     describe(enhanced_tsch_receptions, 'Enhanced TSCH')
-    #     for subplot in range(6):
-    #         axes[subplot].plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='blue', linestyle='-.')
-    #         axes[subplot].plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linestyle=':')
-    #     # Intelligent TSCH
-    #     for reducing_method, (penalty_weight, network) in models.items():
-    #         print(f'Reducing Method: "{reducing_method}"')
-    #         plt_color = 'green' if reducing_method == 'mean' else 'purple'
-    #         plt_style = '--' if reducing_method == 'mean' else '-'
-    #         network.eval()
-    #         pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
-    #         past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
-    #         past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
-    #         past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
-    #         blacklist = network(past_windows_normalized)
-    #         future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
-    #         subplot = -1
-    #         for threshold in (0.25, 0.50, 0.75):
-    #             available_channels = blacklist < threshold
-    #             interference_values = intelligent_tsch(future_windows, available_channels)
-    #             error_props_values = error_props(interference_values)
-    #             reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-    #             describe(reception_props_values, 'Threshold: {:.2f}'.format(threshold))
-    #             subplot += 1
-    #             axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
-    #             axes[subplot].set_title('Threshold: {:.2f}'.format(threshold))
-    #         for n in (3, 6, 9):
-    #             scores_sorted = np.sort(blacklist)
-    #             thresholds = scores_sorted[:, n]
-    #             thresholds = np.expand_dims(thresholds, axis=1)
-    #             available_channels = blacklist < torch.from_numpy(thresholds)
-    #             interference_values = intelligent_tsch(future_windows, available_channels)
-    #             error_props_values = error_props(interference_values)
-    #             reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-    #             describe(reception_props_values, 'Top {}'.format(n))
-    #             subplot += 1
-    #             axes[subplot].plot(reception_props_values, label='Our Work ({})'.format(reducing_method.capitalize()), color=plt_color, linestyle=plt_style)
-    #             axes[subplot].set_title('Top {}'.format(n))
-    #         axes[subplot].set_xlim(0, datapoints)
-    #         axes[subplot].set_xlabel('Time (Sec)')
-    #         axes[subplot].set_ylabel('PRP')
-    #         axes[subplot].set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
-    #         axes[subplot].set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
-    # handles, labels = axes[subplot].get_legend_handles_labels()
-    # figure.legend(handles, labels, loc='center right')
-    # plt.savefig(f'results/{dataset}-performances.png')
-    # plt.show()

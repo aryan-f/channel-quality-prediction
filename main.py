@@ -35,7 +35,7 @@ if __name__ == '__main__':
     # Adjusting the DPI of the figures.
     mpl.rcParams['figure.dpi'] = 300
     # Configuration
-    dataset = 'apartments'
+    dataset = 'downtown'
     sample_rate, device_sample_rate = 2000, 10
     power, alpha, distance = -10., 3.5, 3.
     packet_length = 133  # Bytes
@@ -146,6 +146,6 @@ if __name__ == '__main__':
         axis.set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
         axis.set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
         axis.set_xlim(240 * sample_rate, min(len(reception_props_values), 300 * sample_rate))
-        axis.set_ylim(0.7, 1.02)
+        axis.set_ylim(0.35, 1)
         axis.set_title(dataset.capitalize())
     plt.show()

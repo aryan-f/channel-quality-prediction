@@ -1,3 +1,5 @@
+import argparse
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +24,7 @@ def reduce(values, method, matrix=None):
 
 def describe(receptions, title, ed_enabled=True):
     print(title)
-    prr = torch.mean(receptions[240 * sample_rate: 300 * sample_rate])
+    prr = torch.mean(receptions[train_samples_cutoff: 300 * args.sample_rate])
     n_ed, n_rx, n_tx = 3 if ed_enabled else 0, 7, 1
     i_ed, i_rx, i_tx = 5e-3, 5e-3, 10e-3
     t_ed, t_tx = 128e-6,  3.2e-3
@@ -33,42 +35,52 @@ def describe(receptions, title, ed_enabled=True):
 
 if __name__ == '__main__':
     # Adjusting the DPI of the figures.
-    mpl.rcParams['figure.dpi'] = 300
-    # Configuration
-    dataset = 'downtown'
-    sample_rate, device_sample_rate = 2000, 10
-    power, alpha, distance = -10., 3.5, 3.
-    packet_length = 133  # Bytes
-    past_window, future_window = 5, 5  # Seconds
-    layers, neurons = 2, 50
-    iterations, batch_size = 1000, 32
+    mpl.rcParams.update({'figure.dpi': 300, 'font.size': 7})
+    # Command Line Arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('dataset', choices=('apartments', 'downtown', 'suburb'))
+    parser.add_argument('--train', action='store_true', default=False, help='if not specified, loads saved model')
+    parser.add_argument('--train-split', type=int, default=240, help='in seconds')
+    parser.add_argument('--sample-rate', type=int, default=2000, help='dataset sample rate')
+    parser.add_argument('--target-rate', type=int, default=10, help='sample rate of the data fed to the network')
+    parser.add_argument('--power', type=float, default=-10., help='tran. power in dBm')
+    parser.add_argument('--alpha', type=float, default=3.5, help='path-loss exponent')
+    parser.add_argument('--distance', type=float, default=3., help='assumed to be 3 in Eqn. 5')
+    parser.add_argument('--packet-length', type=int, default=133, help='in bytes')
+    parser.add_argument('--past-window', type=int, default=5, help='denoted as t_p')
+    parser.add_argument('--future-window', type=int, default=5, help='denoted as t_f')
+    parser.add_argument('--layers', type=int, default=2, help='number of recurrent layers')
+    parser.add_argument('--neurons', type=int, default=50, help='number of recurrent neurons')
+    parser.add_argument('--iterations', type=int, default=1000, help='number of iterations to train for')
+    parser.add_argument('--batch-size', type=int, default=32, help='training batch size')
+    args = parser.parse_args()
     # Dataset Preparation
-    data = torch.load(f'data/{dataset}.pt')
+    data = torch.load(f'data/{args.dataset}.pt')
     datapoints, sequences, channels = data.shape
-    training_data = data[:240 * sample_rate]
-    validation_data = data[240 * sample_rate:]
+    train_samples_cutoff = args.train_split * args.sample_rate
+    training_data = data[:train_samples_cutoff]
+    validation_data = data[train_samples_cutoff:]
     data_mean, data_std = torch.mean(training_data), torch.std(training_data)
     # Modules Setup
     criterion = nn.BCELoss()
-    error_props = BitErrorProb(power, alpha, distance)
-    reception_props = PacketReceptionProb(packet_length)
-    models = {'mean': (0.05, Network(layers, neurons)), 'max': (0.55, Network(layers, neurons))}
+    error_props = BitErrorProb(args.power, args.alpha, args.distance)
+    reception_props = PacketReceptionProb(args.packet_length)
+    models = {'mean': (0.05, Network(args.layers, args.neurons)), 'max': (0.55, Network(args.layers, args.neurons))}
     # Whether to train a new model or load pre-trained ones.
-    user_input = input('Train again? [Y/n]')
-    if user_input == 'Y':
+    if args.train:
         # Training a New Model
         for reducing_method, (penalty_weight, network) in models.items():
             optimizer = optim.RMSprop(network.parameters(), lr=1e-4)
             metrics = list()
             network.train()
-            for iteration in range(iterations):
+            for iteration in range(args.iterations):
                 optimizer.zero_grad()
                 # Selecting a Random Batch
-                random_indices = np.random.randint(past_window * sample_rate, int(0.80 * datapoints) - future_window * sample_rate, batch_size)
-                past_windows = torch.cat([training_data[index - past_window * sample_rate: index] for index in random_indices], dim=1)
-                future_windows = torch.cat([training_data[index: index + future_window * sample_rate] for index in random_indices], dim=1)
+                random_indices = np.random.randint(args.past_window * args.sample_rate, int(0.80 * datapoints) - args.future_window * args.sample_rate, args.batch_size)
+                past_windows = torch.cat([training_data[index - args.past_window * args.sample_rate: index] for index in random_indices], dim=1)
+                future_windows = torch.cat([training_data[index: index + args.future_window * args.sample_rate] for index in random_indices], dim=1)
                 # Forward Pass through the Network Module
-                past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
+                past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=args.target_rate / args.sample_rate, mode='linear').permute(2, 0, 1)
                 past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
                 blacklist = network(past_windows_normalized)
                 # Forward Pass through the Simulation Module
@@ -91,9 +103,9 @@ if __name__ == '__main__':
                 iteration_metrics = (cross_entropy_loss.item(), blacklisting_penalty.item(), loss_func.item())
                 metrics.append(iteration_metrics)
                 print('Iteration {}/{} Cross-Entropy Loss: {:.4f} Blacklisting Penalty: {:.4f} Total Loss: {:.4f}'.format(
-                    iteration + 1, iterations, *iteration_metrics
+                    iteration + 1, args.iterations, *iteration_metrics
                 ))
-            files_path = f'results/{dataset}-{reducing_method}'
+            files_path = f'results/{args.dataset}-{reducing_method}'
             torch.save(network, files_path + '.pt')
             metrics = np.array(metrics)
             # noinspection PyTypeChecker
@@ -107,28 +119,29 @@ if __name__ == '__main__':
     else:
         # Loading already-trained Models
         for reducing_method, (penalty_weight, network) in models.items():
-            model_path = f'results/{dataset}-{reducing_method}.pt'
+            model_path = f'results/{args.dataset}-{reducing_method}.pt'
             models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
-    print(f'[{dataset.capitalize()}]')
+    print(f'[{args.dataset.capitalize()}]')
     tsch_interference, tsch_channels_matrix = tsch(data)
     tsch_errors = error_props(tsch_interference)
     tsch_receptions = reception_props(tsch_errors)
     describe(tsch_receptions, 'Standard TSCH', ed_enabled=False)
-    enhanced_tsch_interference = enhanced_tsch(data, device_sample_rate / sample_rate)
+    enhanced_tsch_interference = enhanced_tsch(data, args.target_rate / args.sample_rate)
     enhanced_tsch_errors = error_props(enhanced_tsch_interference)
     enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
     describe(enhanced_tsch_receptions, 'Enhanced TSCH')
     # noinspection PyTypeChecker
     figure, axis = plt.subplots(sharex=True, sharey=True, figsize=(4, 2.5))
-    axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='gray')
-    axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange')
+    width = 0.5  # Adjust me!
+    axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='gray', linewidth=width)
+    axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linewidth=width)
     for reducing_method, (penalty_weight, network) in models.items():
         network.eval()
-        pivots = np.arange(past_window * sample_rate, datapoints, future_window * sample_rate)
-        past_windows = torch.cat([data[index - past_window * sample_rate: index] for index in pivots], dim=1)
-        future_windows = torch.cat([data[index: index + future_window * sample_rate] for index in pivots], dim=1)
-        past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=device_sample_rate / sample_rate, mode='linear').permute(2, 0, 1)
+        pivots = np.arange(args.past_window * args.sample_rate, datapoints, args.future_window * args.sample_rate)
+        past_windows = torch.cat([data[index - args.past_window * args.sample_rate: index] for index in pivots], dim=1)
+        future_windows = torch.cat([data[index: index + args.future_window * args.sample_rate] for index in pivots], dim=1)
+        past_windows_downsampled = func.interpolate(past_windows.permute(1, 2, 0), scale_factor=args.target_rate / args.sample_rate, mode='linear').permute(2, 0, 1)
         past_windows_normalized = (past_windows_downsampled - data_mean) / data_std
         with torch.no_grad():
             blacklist = network(past_windows_normalized)
@@ -138,14 +151,15 @@ if __name__ == '__main__':
             available_channels = blacklist < torch.from_numpy(thresholds)
             interference_values = intelligent_tsch(future_windows, available_channels)
             error_props_values = error_props(interference_values)
-            reception_props_values = reception_props(torch.cat((tsch_errors[:past_window * sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-        describe(reception_props_values, 'Our Work ({})'.format(reducing_method))
-        axis.plot(reception_props_values, label='Our Work ({})'.format(reducing_method), color='green' if reducing_method == 'mean' else 'blue')
+            reception_props_values = reception_props(torch.cat((tsch_errors[:args.past_window * args.sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
+        describe(reception_props_values, 'ITSCH ({})'.format(reducing_method))
+        axis.plot(reception_props_values, label='ITSCH ({})'.format(reducing_method), color='green' if reducing_method == 'mean' else 'blue', linewidth=width)
         axis.set_xlabel('Time (Sec)')
         axis.set_ylabel('PRP')
-        axis.set_xticks(np.arange(0, datapoints + 1, 15 * sample_rate))
-        axis.set_xticklabels(np.arange(0, datapoints / sample_rate + 1, 15).astype('int'))
-        axis.set_xlim(240 * sample_rate, min(len(reception_props_values), 300 * sample_rate))
-        axis.set_ylim(0.35, 1)
-        axis.set_title(dataset.capitalize())
+        axis.set_xticks(np.arange(0, datapoints + 1, 15 * args.sample_rate))
+        axis.set_xticklabels(np.arange(0, datapoints / args.sample_rate + 1, 15).astype('int'))
+        axis.set_xlim(train_samples_cutoff, min(len(reception_props_values), 300 * args.sample_rate))
+        axis.set_ylim(round(tsch_receptions.numpy().flatten()[train_samples_cutoff: min(len(reception_props_values), 300 * args.sample_rate)].min(), 1), 1.01)
+        axis.set_title(args.dataset.capitalize())
+    plt.gcf().subplots_adjust(left=0.15, bottom=0.18)
     plt.show()

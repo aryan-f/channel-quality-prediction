@@ -3,6 +3,7 @@ import argparse
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
@@ -22,17 +23,6 @@ def reduce(values, method, matrix=None):
     return values
 
 
-def describe(receptions, title, ed_enabled=True):
-    print(title)
-    prr = torch.mean(receptions[train_samples_cutoff: 300 * args.sample_rate])
-    n_ed, n_rx, n_tx = 3 if ed_enabled else 0, 7, 1
-    i_ed, i_rx, i_tx = 5e-3, 5e-3, 10e-3
-    t_ed, t_tx = 128e-6,  3.2e-3
-    v_cc = 3.3
-    energy = (i_ed * n_ed * t_ed + (i_rx * n_rx * t_tx + i_tx * n_tx * t_tx) / prr) * v_cc
-    print('PRR: {:.4f}, Energy Consumption: {:.2f} uJ'.format(prr, energy * 1e6))
-
-
 if __name__ == '__main__':
     # Adjusting the DPI of the figures.
     mpl.rcParams.update({'figure.dpi': 300, 'font.size': 7})
@@ -41,6 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset', choices=('apartments', 'downtown', 'suburb'))
     parser.add_argument('--train', action='store_true', default=False, help='if not specified, loads saved model')
     parser.add_argument('--train-split', type=int, default=240, help='in seconds')
+    parser.add_argument('--eval-limit', type=int, default=300, help='in seconds')
     parser.add_argument('--sample-rate', type=int, default=2000, help='dataset sample rate')
     parser.add_argument('--target-rate', type=int, default=10, help='sample rate of the data fed to the network')
     parser.add_argument('--power', type=float, default=-10., help='tran. power in dBm')
@@ -57,9 +48,8 @@ if __name__ == '__main__':
     # Dataset Preparation
     data = torch.load(f'data/{args.dataset}.pt')
     datapoints, sequences, channels = data.shape
-    train_samples_cutoff = args.train_split * args.sample_rate
-    training_data = data[:train_samples_cutoff]
-    validation_data = data[train_samples_cutoff:]
+    train_cutoff = args.train_split * args.sample_rate
+    training_data = data[:train_cutoff]
     data_mean, data_std = torch.mean(training_data), torch.std(training_data)
     # Modules Setup
     criterion = nn.BCELoss()
@@ -122,20 +112,17 @@ if __name__ == '__main__':
             model_path = f'results/{args.dataset}-{reducing_method}.pt'
             models[reducing_method] = (penalty_weight, torch.load(model_path))
     # Evaluation
-    print(f'[{args.dataset.capitalize()}]')
     tsch_interference, tsch_channels_matrix = tsch(data)
     tsch_errors = error_props(tsch_interference)
     tsch_receptions = reception_props(tsch_errors)
-    describe(tsch_receptions, 'Standard TSCH', ed_enabled=False)
     enhanced_tsch_interference = enhanced_tsch(data, args.target_rate / args.sample_rate)
     enhanced_tsch_errors = error_props(enhanced_tsch_interference)
     enhanced_tsch_receptions = reception_props(enhanced_tsch_errors)
-    describe(enhanced_tsch_receptions, 'Enhanced TSCH')
-    # noinspection PyTypeChecker
-    figure, axis = plt.subplots(sharex=True, sharey=True, figsize=(4, 2.5))
-    width = 0.5  # Adjust me!
-    axis.plot(tsch_receptions.numpy().flatten(), label='Standard TSCH', color='gray', linewidth=width)
-    axis.plot(enhanced_tsch_receptions.numpy().flatten(), label='Enhanced TSCH', color='orange', linewidth=width)
+    tsch_array = tsch_receptions.numpy().flatten()
+    time_array = np.arange(tsch_array.size) / args.sample_rate
+    eval_limit = min(tsch_array.size, args.eval_limit * args.sample_rate)
+    enhanced_tsch_array = enhanced_tsch_receptions.numpy().flatten()
+    store = {'Time': time_array, 'TSCH': tsch_array, 'ETSCH': enhanced_tsch_array}
     for reducing_method, (penalty_weight, network) in models.items():
         network.eval()
         pivots = np.arange(args.past_window * args.sample_rate, datapoints, args.future_window * args.sample_rate)
@@ -152,14 +139,5 @@ if __name__ == '__main__':
             interference_values = intelligent_tsch(future_windows, available_channels)
             error_props_values = error_props(interference_values)
             reception_props_values = reception_props(torch.cat((tsch_errors[:args.past_window * args.sample_rate], error_props_values.permute(1, 0).view(-1, 1)), dim=0))
-        describe(reception_props_values, 'ITSCH ({})'.format(reducing_method))
-        axis.plot(reception_props_values, label='ITSCH ({})'.format(reducing_method), color='green' if reducing_method == 'mean' else 'blue', linewidth=width)
-        axis.set_xlabel('Time (Sec)')
-        axis.set_ylabel('PRP')
-        axis.set_xticks(np.arange(0, datapoints + 1, 15 * args.sample_rate))
-        axis.set_xticklabels(np.arange(0, datapoints / args.sample_rate + 1, 15).astype('int'))
-        axis.set_xlim(train_samples_cutoff, min(len(reception_props_values), 300 * args.sample_rate))
-        axis.set_ylim(round(tsch_receptions.numpy().flatten()[train_samples_cutoff: min(len(reception_props_values), 300 * args.sample_rate)].min(), 1), 1.01)
-        axis.set_title(args.dataset.capitalize())
-    plt.gcf().subplots_adjust(left=0.15, bottom=0.18)
-    plt.show()
+        store['ITSCH_{}'.format(reducing_method.capitalize())] = reception_props_values.numpy().flatten()
+    pd.DataFrame(store).iloc[train_cutoff:eval_limit].to_csv('performances/{}.csv'.format(args.dataset), index=False, float_format='%.6f')

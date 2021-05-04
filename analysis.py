@@ -4,6 +4,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 
 def energy(props, ed_enabled=True):
@@ -21,6 +22,7 @@ if __name__ == '__main__':
     # Command Line Arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('datasets', choices=('apartments', 'downtown', 'suburb'), nargs='+')
+    parser.add_argument('-alpha', type=float, default=0.95)
     args = parser.parse_args()
     # Data Preparation
     labels = ('TSCH', 'ETSCH', 'ITSCH (Mean BERs)', 'ITSCH (Max BERs)')
@@ -40,6 +42,17 @@ if __name__ == '__main__':
     axes[count].set_xlabel('Time (Sec.)')
     plt.tight_layout()
     plt.show()
+    # PRRs
+    rows = list()
+    for count, (dataset, dataframe) in enumerate(stored.items()):
+        for column in columns:
+            series = dataframe[column]
+            n = series.size
+            loc = np.mean(series)
+            scale = scipy.stats.sem(series)
+            start, end = scipy.stats.t.interval(args.alpha, n - 1, loc, scale)
+            rows.append((dataset.capitalize(), column, loc, start, end))
+    print(pd.DataFrame(rows, columns=('Scenario', 'Method', 'Mean', 'Interval Start', 'Interval End')))
     # Box Plots
     width = 0.75
     # noinspection PyTypeChecker
@@ -52,8 +65,6 @@ if __name__ == '__main__':
                                    meanprops={'color': 'black', 'linestyle': 'solid'}, meanline=True, showmeans=True,
                                    medianprops={'linewidth': 0})
         means = np.mean(sets, axis=1)
-        for x, value in zip(positions, means):
-            axes[count].text(x - (width / 3), value + 0.005, '{:.4f}'.format(value))
         axes[count].set_ylabel('PRP')
         axes[count].set_xlim(0.25, 4.75)
         axes[count].set_title(dataset.capitalize())

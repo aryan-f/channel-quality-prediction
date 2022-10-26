@@ -13,7 +13,7 @@ pytz==2021.1
 requests==2.25.1
 scipy==1.6.3
 six==1.15.0
-torch @ file:///home/mohammad/Downloads/torch-1.7.1%2Bcu110-cp37-cp37m-linux_x86_64.whl
+torch==1.7.1
 torchaudio==0.7.2
 torchvision==0.8.2+cu110
 typing-extensions==3.7.4.3
